@@ -13,10 +13,20 @@ import '../widgets/image_display.dart';
 import '../widgets/empty_media_display.dart';
 import '../widgets/media_control_panel.dart';
 import '../widgets/audio_progress_bar.dart';
+import 'playlists_screen.dart';
 
 /// Pantalla principal del reproductor multimedia
 class MediaPlayerScreen extends StatefulWidget {
-  const MediaPlayerScreen({super.key});
+  final String? filePath;
+  final String? fileName;
+  final MediaType? mediaType;
+
+  const MediaPlayerScreen({
+    super.key,
+    this.filePath,
+    this.fileName,
+    this.mediaType,
+  });
 
   @override
   State<MediaPlayerScreen> createState() => _MediaPlayerScreenState();
@@ -44,6 +54,24 @@ class _MediaPlayerScreenState extends State<MediaPlayerScreen> {
   void initState() {
     super.initState();
     _setupAudioListeners();
+
+    // Si se proporcionaron datos iniciales, cargarlos
+    if (widget.filePath != null &&
+        widget.fileName != null &&
+        widget.mediaType != null) {
+      _filePath = widget.filePath;
+      _fileName = widget.fileName;
+      _mediaType = widget.mediaType;
+
+      // Iniciar reproducción según el tipo
+      Future.delayed(Duration.zero, () {
+        if (_mediaType == MediaType.audio) {
+          _play();
+        } else if (_mediaType == MediaType.video) {
+          _initializeVideo();
+        }
+      });
+    }
   }
 
   @override
@@ -261,6 +289,20 @@ class _MediaPlayerScreenState extends State<MediaPlayerScreen> {
       appBar: AppBar(
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
         title: const Text('Reproductor Multimedia'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.playlist_play),
+            tooltip: 'Listas de Reproducción',
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => const PlaylistsScreen(),
+                ),
+              );
+            },
+          ),
+        ],
       ),
       body: Column(
         children: [

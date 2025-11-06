@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import '../models/playlist.dart';
-import '../services/database_service.dart';
+import '../providers/playlist_provider.dart';
 import 'playlist_detail_screen.dart';
 
 /// Pantalla para mostrar y gestionar las listas de reproducción
@@ -12,23 +13,12 @@ class PlaylistsScreen extends StatefulWidget {
 }
 
 class _PlaylistsScreenState extends State<PlaylistsScreen> {
-  final DatabaseService _db = DatabaseService.instance;
-  List<Playlist> _playlists = [];
-  bool _isLoading = true;
-
   @override
   void initState() {
     super.initState();
-    _loadPlaylists();
-  }
-
-  /// Carga las listas de reproducción desde la base de datos
-  Future<void> _loadPlaylists() async {
-    setState(() => _isLoading = true);
-    final playlists = await _db.getPlaylists();
-    setState(() {
-      _playlists = playlists;
-      _isLoading = false;
+    // Cargar listas al iniciar
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      context.read<PlaylistProvider>().loadPlaylists();
     });
   }
 
@@ -77,18 +67,12 @@ class _PlaylistsScreenState extends State<PlaylistsScreen> {
     );
 
     if (result == true && nameController.text.isNotEmpty) {
-      final now = DateTime.now();
-      final playlist = Playlist(
-        name: nameController.text,
-        description: descriptionController.text,
-        createdAt: now,
-        updatedAt: now,
+      final success = await context.read<PlaylistProvider>().createPlaylist(
+        nameController.text,
+        descriptionController.text,
       );
 
-      await _db.createPlaylist(playlist);
-      _loadPlaylists();
-
-      if (mounted) {
+      if (mounted && success) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Lista creada exitosamente')),
         );
@@ -139,13 +123,13 @@ class _PlaylistsScreenState extends State<PlaylistsScreen> {
       final updatedPlaylist = playlist.copyWith(
         name: nameController.text,
         description: descriptionController.text,
-        updatedAt: DateTime.now(),
       );
 
-      await _db.updatePlaylist(updatedPlaylist);
-      _loadPlaylists();
+      final success = await context.read<PlaylistProvider>().updatePlaylist(
+        updatedPlaylist,
+      );
 
-      if (mounted) {
+      if (mounted && success) {
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(const SnackBar(content: Text('Lista actualizada')));
@@ -155,7 +139,10 @@ class _PlaylistsScreenState extends State<PlaylistsScreen> {
 
   /// Muestra el diálogo de confirmación para eliminar una lista
   Future<void> _showDeleteConfirmDialog(Playlist playlist) async {
-    final count = await _db.getPlaylistItemCount(playlist.id!);
+    final provider = context.read<PlaylistProvider>();
+    final count = await provider.getPlaylistItemCount(playlist.id!);
+
+    if (!mounted) return;
 
     final result = await showDialog<bool>(
       context: context,
@@ -184,10 +171,9 @@ class _PlaylistsScreenState extends State<PlaylistsScreen> {
     );
 
     if (result == true) {
-      await _db.deletePlaylist(playlist.id!);
-      _loadPlaylists();
+      final success = await provider.deletePlaylist(playlist.id!);
 
-      if (mounted) {
+      if (mounted && success) {
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(const SnackBar(content: Text('Lista eliminada')));
@@ -203,7 +189,10 @@ class _PlaylistsScreenState extends State<PlaylistsScreen> {
         builder: (context) => PlaylistDetailScreen(playlist: playlist),
       ),
     );
-    _loadPlaylists(); // Recargar por si hubo cambios
+    // Recargar al volver
+    if (mounted) {
+      context.read<PlaylistProvider>().loadPlaylists();
+    }
   }
 
   @override
@@ -213,10 +202,14 @@ class _PlaylistsScreenState extends State<PlaylistsScreen> {
         title: const Text('Listas de Reproducción'),
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
       ),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : _playlists.isEmpty
-          ? Center(
+      body: Consumer<PlaylistProvider>(
+        builder: (context, provider, child) {
+          if (provider.isLoading) {
+            return const Center(child: CircularProgressIndicator());
+          }
+
+          if (!provider.hasPlaylists) {
+            return Center(
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
@@ -233,96 +226,100 @@ class _PlaylistsScreenState extends State<PlaylistsScreen> {
                   ),
                 ],
               ),
-            )
-          : ListView.builder(
-              itemCount: _playlists.length,
-              itemBuilder: (context, index) {
-                final playlist = _playlists[index];
-                return FutureBuilder<int>(
-                  future: _db.getPlaylistItemCount(playlist.id!),
-                  builder: (context, snapshot) {
-                    final count = snapshot.data ?? 0;
-                    return Card(
-                      margin: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 4,
+            );
+          }
+
+          return ListView.builder(
+            itemCount: provider.playlists.length,
+            itemBuilder: (context, index) {
+              final playlist = provider.playlists[index];
+              return FutureBuilder<int>(
+                future: provider.getPlaylistItemCount(playlist.id!),
+                builder: (context, snapshot) {
+                  final count = snapshot.data ?? 0;
+                  return Card(
+                    margin: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 4,
+                    ),
+                    child: ListTile(
+                      leading: CircleAvatar(
+                        backgroundColor: Theme.of(
+                          context,
+                        ).colorScheme.primaryContainer,
+                        child: Icon(
+                          Icons.queue_music,
+                          color: Theme.of(context).colorScheme.primary,
+                        ),
                       ),
-                      child: ListTile(
-                        leading: CircleAvatar(
-                          backgroundColor: Theme.of(
-                            context,
-                          ).colorScheme.primaryContainer,
-                          child: Icon(
-                            Icons.queue_music,
-                            color: Theme.of(context).colorScheme.primary,
-                          ),
-                        ),
-                        title: Text(
-                          playlist.name,
-                          style: const TextStyle(fontWeight: FontWeight.bold),
-                        ),
-                        subtitle: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            if (playlist.description.isNotEmpty)
-                              Text(
-                                playlist.description,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
+                      title: Text(
+                        playlist.name,
+                        style: const TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                      subtitle: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          if (playlist.description.isNotEmpty)
                             Text(
-                              '$count elemento(s)',
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: Colors.grey[600],
-                              ),
+                              playlist.description,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
                             ),
-                          ],
-                        ),
-                        trailing: PopupMenuButton<String>(
-                          onSelected: (value) {
-                            switch (value) {
-                              case 'edit':
-                                _showEditPlaylistDialog(playlist);
-                                break;
-                              case 'delete':
-                                _showDeleteConfirmDialog(playlist);
-                                break;
-                            }
-                          },
-                          itemBuilder: (context) => [
-                            const PopupMenuItem(
-                              value: 'edit',
-                              child: Row(
-                                children: [
-                                  Icon(Icons.edit),
-                                  SizedBox(width: 8),
-                                  Text('Editar'),
-                                ],
-                              ),
+                          Text(
+                            '$count elemento(s)',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.grey[600],
                             ),
-                            const PopupMenuItem(
-                              value: 'delete',
-                              child: Row(
-                                children: [
-                                  Icon(Icons.delete, color: Colors.red),
-                                  SizedBox(width: 8),
-                                  Text(
-                                    'Eliminar',
-                                    style: TextStyle(color: Colors.red),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
-                        onTap: () => _navigateToPlaylistDetail(playlist),
+                          ),
+                        ],
                       ),
-                    );
-                  },
-                );
-              },
-            ),
+                      trailing: PopupMenuButton<String>(
+                        onSelected: (value) {
+                          switch (value) {
+                            case 'edit':
+                              _showEditPlaylistDialog(playlist);
+                              break;
+                            case 'delete':
+                              _showDeleteConfirmDialog(playlist);
+                              break;
+                          }
+                        },
+                        itemBuilder: (context) => [
+                          const PopupMenuItem(
+                            value: 'edit',
+                            child: Row(
+                              children: [
+                                Icon(Icons.edit),
+                                SizedBox(width: 8),
+                                Text('Editar'),
+                              ],
+                            ),
+                          ),
+                          const PopupMenuItem(
+                            value: 'delete',
+                            child: Row(
+                              children: [
+                                Icon(Icons.delete, color: Colors.red),
+                                SizedBox(width: 8),
+                                Text(
+                                  'Eliminar',
+                                  style: TextStyle(color: Colors.red),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                      onTap: () => _navigateToPlaylistDetail(playlist),
+                    ),
+                  );
+                },
+              );
+            },
+          );
+        },
+      ),
       floatingActionButton: FloatingActionButton(
         onPressed: _showCreatePlaylistDialog,
         child: const Icon(Icons.add),

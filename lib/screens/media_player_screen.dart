@@ -5,6 +5,7 @@ import 'package:chewie/chewie.dart';
 import 'dart:io';
 
 import '../models/media_type.dart';
+import '../models/media_item.dart';
 import '../services/permission_service.dart';
 import '../services/file_picker_service.dart';
 import '../widgets/audio_display.dart';
@@ -20,12 +21,16 @@ class MediaPlayerScreen extends StatefulWidget {
   final String? filePath;
   final String? fileName;
   final MediaType? mediaType;
+  final List<MediaItem>? playlist;
+  final int? initialIndex;
 
   const MediaPlayerScreen({
     super.key,
     this.filePath,
     this.fileName,
     this.mediaType,
+    this.playlist,
+    this.initialIndex,
   });
 
   @override
@@ -50,10 +55,18 @@ class _MediaPlayerScreenState extends State<MediaPlayerScreen> {
   Duration _duration = Duration.zero;
   Duration _position = Duration.zero;
 
+  // Lista de reproducción
+  List<MediaItem>? _playlist;
+  int _currentIndex = 0;
+
   @override
   void initState() {
     super.initState();
     _setupAudioListeners();
+
+    // Configurar lista de reproducción si existe
+    _playlist = widget.playlist;
+    _currentIndex = widget.initialIndex ?? 0;
 
     // Si se proporcionaron datos iniciales, cargarlos
     if (widget.filePath != null &&
@@ -84,6 +97,13 @@ class _MediaPlayerScreenState extends State<MediaPlayerScreen> {
   void _setupAudioListeners() {
     _audioPlayer.onPlayerStateChanged.listen((PlayerState state) {
       setState(() => _playerState = state);
+
+      // Si terminó de reproducir y hay una lista, reproducir siguiente
+      if (state == PlayerState.completed &&
+          _playlist != null &&
+          _playlist!.isNotEmpty) {
+        _playNext();
+      }
     });
 
     _audioPlayer.onDurationChanged.listen((Duration duration) {
@@ -245,6 +265,84 @@ class _MediaPlayerScreenState extends State<MediaPlayerScreen> {
     }
   }
 
+  /// Reproduce el siguiente elemento de la lista
+  Future<void> _playNext() async {
+    if (_playlist == null || _playlist!.isEmpty) return;
+
+    // Si no estamos en el último elemento
+    if (_currentIndex < _playlist!.length - 1) {
+      _currentIndex++;
+      await _loadAndPlayFromPlaylist(_currentIndex);
+    } else {
+      // Opcional: volver al inicio o detener
+      _currentIndex = 0;
+      await _loadAndPlayFromPlaylist(_currentIndex);
+    }
+  }
+
+  /// Reproduce el elemento anterior de la lista
+  Future<void> _playPrevious() async {
+    if (_playlist == null || _playlist!.isEmpty) return;
+
+    // Si no estamos en el primer elemento
+    if (_currentIndex > 0) {
+      _currentIndex--;
+      await _loadAndPlayFromPlaylist(_currentIndex);
+    } else {
+      // Opcional: ir al último o quedarse en el primero
+      _currentIndex = _playlist!.length - 1;
+      await _loadAndPlayFromPlaylist(_currentIndex);
+    }
+  }
+
+  /// Carga y reproduce un elemento de la lista
+  Future<void> _loadAndPlayFromPlaylist(int index) async {
+    if (_playlist == null || index < 0 || index >= _playlist!.length) return;
+
+    final item = _playlist![index];
+
+    // Verificar si el archivo existe
+    final file = File(item.filePath);
+    if (!await file.exists()) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('${item.fileName} no existe o fue movido')),
+      );
+      // Intentar con el siguiente
+      if (index < _playlist!.length - 1) {
+        _currentIndex = index + 1;
+        await _loadAndPlayFromPlaylist(_currentIndex);
+      }
+      return;
+    }
+
+    // Detener reproducción actual
+    if (_mediaType == MediaType.audio) {
+      await _audioPlayer.stop();
+    } else if (_mediaType == MediaType.video) {
+      _videoPlayerController?.pause();
+      _videoPlayerController?.dispose();
+      _chewieController?.dispose();
+      _videoPlayerController = null;
+      _chewieController = null;
+    }
+
+    // Cargar nuevo archivo
+    setState(() {
+      _filePath = item.filePath;
+      _fileName = item.fileName;
+      _mediaType = item.mediaType;
+      _position = Duration.zero;
+      _duration = Duration.zero;
+    });
+
+    // Reproducir según el tipo
+    if (_mediaType == MediaType.audio) {
+      await _play();
+    } else if (_mediaType == MediaType.video) {
+      await _initializeVideo();
+    }
+  }
+
   /// Construye el área de visualización según el tipo de medio
   Widget _buildMediaDisplay() {
     if (_filePath == null) {
@@ -288,7 +386,17 @@ class _MediaPlayerScreenState extends State<MediaPlayerScreen> {
     return Scaffold(
       appBar: AppBar(
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        title: const Text('Reproductor Multimedia'),
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Reproductor Multimedia'),
+            if (_playlist != null && _playlist!.isNotEmpty)
+              Text(
+                'Elemento ${_currentIndex + 1} de ${_playlist!.length}',
+                style: const TextStyle(fontSize: 12),
+              ),
+          ],
+        ),
         actions: [
           IconButton(
             icon: const Icon(Icons.playlist_play),
@@ -313,6 +421,33 @@ class _MediaPlayerScreenState extends State<MediaPlayerScreen> {
               child: Center(child: _buildMediaDisplay()),
             ),
           ),
+
+          // Controles de navegación de lista (si hay lista)
+          if (_playlist != null &&
+              _playlist!.isNotEmpty &&
+              _mediaType != MediaType.video)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              color: Theme.of(context).colorScheme.surfaceContainerHighest,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  IconButton(
+                    icon: const Icon(Icons.skip_previous),
+                    iconSize: 36,
+                    onPressed: _playPrevious,
+                    tooltip: 'Anterior',
+                  ),
+                  const SizedBox(width: 32),
+                  IconButton(
+                    icon: const Icon(Icons.skip_next),
+                    iconSize: 36,
+                    onPressed: _playNext,
+                    tooltip: 'Siguiente',
+                  ),
+                ],
+              ),
+            ),
 
           // Panel de controles - Solo para audio e imágenes
           if (_mediaType != MediaType.video)
